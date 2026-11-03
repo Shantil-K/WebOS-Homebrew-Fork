@@ -1,3 +1,18 @@
+# webOS Discoverium
+
+A fork of [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop) by the webOS Homebrew Team, with a **Discoverium** tab added. It keeps homebrew apps on an LG webOS TV up to date from their release links, like Obtainium and Discoverium do for Android apps.
+
+- **Add apps by link:** paste an app's GitHub, GitLab or Codeberg/Gitea/Forgejo repository. The list starts empty.
+- **Update all:** one button updates every app with a newer release, using Dev Manager's own installer (Homebrew Channel on rooted TVs, developer mode otherwise).
+- **Shared with the TV:** the list is stored on the TV (`/media/developer/discoverium/sources.json`) and shared with the [Discoverium TV](https://github.com/Shantil-K/DiscoveriumTV) app, which can also update apps by itself in the background.
+- **Everything else** is Dev Manager as before: device setup (developer mode, or root SSH with a key or password), apps, files and terminal.
+
+Changes from upstream are in `src/app/discover/` plus small edits to the routes, the nav bar, the app name and ID (`io.github.shantilk.webosdiscoverium`, so it installs next to the official app), and `angular.json`. `scripts/sync-discover-core.sh` copies the shared update logic from Discoverium TV, and `scripts/sign-apk.sh` signs a local Android build.
+
+Licensed under the Apache License 2.0, like the original. The original README follows.
+
+---
+
 # Device/DevMode Manager for webOS TV
 
 Simple tool to manage developer mode enabled or rooted webOS

@@ -14,6 +14,7 @@ const routes: Routes = [
         path: 'home', component: HomeComponent,
         children: [
             {path: 'apps', loadChildren: () => import('./apps').then(m => m.AppsModule)},
+            {path: 'discover', loadComponent: () => import('./discover/discover.component').then(m => m.DiscoverComponent)},
             {path: 'files', loadChildren: () => import('./files').then(m => m.FilesModule)},
             {path: 'terminal', loadChildren: () => import('./terminal').then(m => m.TerminalModule)},
             {path: 'debug', loadChildren: () => import('./debug').then(m => m.DebugModule)},

@@ -1,0 +1,190 @@
+<div class="dsc">
+  @if (!device) {
+    <div class="empty">
+      <i class="bi bi-tv"></i>
+      <div>Add or choose a TV first</div>
+      <small>Settings → Devices</small>
+    </div>
+  } @else {
+    @switch (view) {
+
+      <!-- ===== Apps ===== -->
+      @case ('apps') {
+        <header class="bar">
+          <h1>Apps</h1>
+          <button class="icon-btn" (click)="load(true)" [disabled]="loading" aria-label="Check for updates">
+            <i class="bi bi-arrow-clockwise" [class.spin]="loading"></i>
+          </button>
+          <button class="icon-btn" (click)="show('settings')" aria-label="Settings"><i class="bi bi-gear"></i></button>
+        </header>
+        <div class="sub">
+          {{ device.name }}
+          @if (loading) { · checking… } @else if (checkedAt) { · checked {{ time(checkedAt) }} }
+        </div>
+        @if (error) { <div class="banner">{{ error }}</div> }
+
+        @if (rows) {
+          @for (r of sortedRows; track r.entry.appId) {
+            <button class="dcard app-card" (click)="show('app', r)">
+              <div class="app-head">
+                @if (icon(r); as src) { <img class="app-icon" [src]="src" alt=""> }
+                @else { <div class="app-icon letter">{{ initial(r) }}</div> }
+                <div class="app-names">
+                  <div class="app-title">{{ r.title }}</div>
+                  <div class="app-by">By {{ r.author }}</div>
+                </div>
+              </div>
+              <div class="app-foot">
+                <div class="app-ver">
+                  @if (r.error) { <span class="bad">{{ r.installed ? r.installed + ' · ' : '' }}Can't check</span> }
+                  @else if (r.update) { <span class="chip">Update</span> {{ r.installed }} → {{ r.latest?.version }} }
+                  @else if (!r.installed) { Not installed }
+                  @else { {{ r.installed }} }
+                </div>
+                <div class="app-date">{{ date(r.latest?.date) }}</div>
+              </div>
+            </button>
+          } @empty {
+            <div class="empty">
+              <i class="bi bi-box-seam"></i>
+              <div>No apps yet</div>
+              <small>Add an app by its GitHub, GitLab or Codeberg link.</small>
+              <button class="pill tonal" (click)="show('add')"><i class="bi bi-plus-lg"></i> Add app</button>
+            </div>
+          }
+        }
+
+        @if (rows?.length) {
+        <div class="fabs">
+          @if (updates.length) {
+            <button class="pill tonal" (click)="install(updates)"><i class="bi bi-download"></i> Update all ({{ updates.length }})</button>
+          }
+          <button class="pill" (click)="show('add')"><i class="bi bi-plus-lg"></i> Add app</button>
+        </div>
+        }
+      }
+
+      <!-- ===== App ===== -->
+      @case ('app') {
+        @if (selected; as r) {
+          <header class="bar">
+            <button class="icon-btn" (click)="back()" aria-label="Back"><i class="bi bi-arrow-left"></i></button>
+            <h1 class="small-title">{{ r.title }}</h1>
+          </header>
+
+          <div class="dcard app-head big">
+            @if (icon(r); as src) { <img class="app-icon" [src]="src" alt=""> }
+            @else { <div class="app-icon letter">{{ initial(r) }}</div> }
+            <div class="app-names">
+              <div class="app-title">{{ r.title }}</div>
+              <div class="app-by">By {{ r.author }}</div>
+            </div>
+          </div>
+
+          <div class="dcard group">
+            <div class="row">
+              <b>{{ r.installed ?? 'Not installed' }}{{ r.installed ? ' Installed' : '' }} / {{ r.latest?.version ?? '?' }} Latest</b>
+              @if (r.latest?.prerelease) { <span class="chip">Pre-release</span> }
+              @if (r.update) { <span class="chip">Update available</span> }
+            </div>
+            @if (r.latest) {
+              <div class="muted">{{ r.latest.ipkName }}</div>
+              <a class="link" href="#" (click)="openLink(r.latest.page, $event)">{{ date(r.latest.date) || 'Release page' }}</a>
+            }
+            @if (r.error) { <div class="bad">{{ r.error }}</div> }
+            @if (r.newerThanRelease) { <div class="warn">The TV has a newer version than this link's release. Is this the right link?</div> }
+          </div>
+
+          <div class="dcard"><b>Last update check:</b> {{ time(checkedAt) }}</div>
+
+          <div class="dcard group">
+            <a class="link" href="#" (click)="openLink(r.entry.url, $event)">{{ r.entry.url }}</a>
+            <div class="muted">{{ r.entry.appId }}</div>
+          </div>
+
+          <div class="dcard group">
+            <label class="switch-row">
+              <span>Update automatically</span>
+              <input type="checkbox" class="toggle" role="switch" [checked]="r.entry.autoUpdate" (change)="setEntry(r, {autoUpdate: !r.entry.autoUpdate})">
+            </label>
+            <label class="switch-row">
+              <span>Include pre-releases</span>
+              <input type="checkbox" class="toggle" role="switch" [checked]="r.entry.prerelease" (change)="setEntry(r, {prerelease: !r.entry.prerelease})">
+            </label>
+            <div class="field-label">.ipk file filter (regular expression, optional)</div>
+            <input class="field" [ngModel]="r.entry.filter" (change)="setEntry(r, {filter: $any($event.target).value})"
+                   placeholder="e.g. _arm\.ipk$" autocapitalize="off" spellcheck="false">
+          </div>
+
+          @if (notes(r); as html) {
+            <div class="dcard notes">
+              <b>Release notes · {{ r.latest?.version }}</b>
+              <div class="notes-body" [innerHTML]="html" (click)="notesClick($event)"></div>
+            </div>
+          }
+
+          <div class="bottom-bar">
+            <button class="icon-btn" (click)="remove(r)" aria-label="Remove"><i class="bi bi-trash"></i></button>
+            <button class="icon-btn" (click)="openLink(r.latest?.page || r.entry.url)" aria-label="Open release page"><i class="bi bi-box-arrow-up-right"></i></button>
+            <span class="flex"></span>
+            <button class="pill" (click)="install([r])" [disabled]="!(r.update || r.install)">
+              <i class="bi bi-download"></i> {{ r.install ? 'Install' : 'Update' }}
+            </button>
+          </div>
+        }
+      }
+
+      <!-- ===== Add app ===== -->
+      @case ('add') {
+        <header class="bar">
+          <button class="icon-btn" (click)="back()" aria-label="Back"><i class="bi bi-arrow-left"></i></button>
+          <h1>Add app</h1>
+        </header>
+        <form class="add-row" (ngSubmit)="add()">
+          <input class="field big" name="addUrl" [(ngModel)]="addUrl" [disabled]="adding" placeholder="App source URL"
+                 autocapitalize="off" autocomplete="off" spellcheck="false" inputmode="url">
+          <button class="icon-btn" type="submit" [disabled]="adding || !addUrl.trim()" aria-label="Add">
+            @if (adding) { <span class="spinner-border spinner-border-sm"></span> } @else { <i class="bi bi-plus-lg"></i> }
+          </button>
+        </form>
+        @if (addError) { <div class="banner">{{ addError }}</div> }
+        <div class="dcard group help">
+          <b>Supported sources</b>
+          <div>GitHub, GitLab and Codeberg (and other Forgejo or Gitea servers).</div>
+          <div class="muted">Paste the app's repository link, like <code>github.com/owner/repo</code>. A link to a release download also works: it is turned into its repository so new versions can be found. Each release needs an <code>.ipk</code> file attached.</div>
+        </div>
+      }
+
+      <!-- ===== Settings ===== -->
+      @case ('settings') {
+        <header class="bar">
+          <button class="icon-btn" (click)="back()" aria-label="Back"><i class="bi bi-arrow-left"></i></button>
+          <h1>Settings</h1>
+        </header>
+        @if (settings) {
+          <div class="dcard group">
+            <label class="switch-row">
+              <span><i class="bi bi-arrow-repeat"></i> TV updates apps by itself</span>
+              <input type="checkbox" class="toggle" role="switch" [checked]="settings.autoUpdate" (change)="setSetting({autoUpdate: !settings.autoUpdate})">
+            </label>
+            <div class="switch-row">
+              <span><i class="bi bi-clock-history"></i> Check for updates</span>
+              <select class="field select" [ngModel]="settings.intervalHours" (ngModelChange)="setSetting({intervalHours: +$event})">
+                @for (h of intervals; track h) { <option [ngValue]="h">{{ hoursLabel(h) }}</option> }
+              </select>
+            </div>
+            <div class="muted">
+              @if (tvHelper === null) { Checking the TV… }
+              @else if (tvHelper) { Discoverium TV is installed on {{ device.name }}, so the TV applies these settings in the background. }
+              @else { Install the Discoverium TV app on a rooted TV to update in the background. Without it, apps update when you press Update here. }
+            </div>
+          </div>
+          <div class="dcard group">
+            <b><i class="bi bi-hdd-network"></i> Shared list</b>
+            <div class="muted">The apps list is stored on {{ device.name }} and shared with the Discoverium TV app, so apps added on either one show up on both.</div>
+          </div>
+        }
+      }
+    }
+  }
+</div>

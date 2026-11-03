@@ -74,3 +74,6 @@ local.properties
 .secrets
 
 .claude/settings.local.json
+
+# Signed builds made by scripts/sign-apk.sh
+/webos-discoverium-*.apk*

@@ -6,8 +6,8 @@
     "devUrl": "http://localhost:4280",
     "frontendDist": "../dist"
   },
-  "identifier": "org.webosbrew.devman",
-  "productName": "webOS Dev Manager",
+  "identifier": "io.github.shantilk.webosdiscoverium",
+  "productName": "webOS Discoverium",
   "version": "../package.json",
   "app": {
     "security": {
@@ -23,7 +23,7 @@
         "minHeight": 600,
         "minWidth": 420,
         "resizable": true,
-        "title": "webOS Dev Manager",
+        "title": "webOS Discoverium",
         "visible": true,
         "width": 1024
       }
