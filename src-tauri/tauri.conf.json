@@ -6,8 +6,8 @@
     "devUrl": "http://localhost:4280",
     "frontendDist": "../dist"
   },
-  "identifier": "io.github.shantilk.webosdiscoverium",
-  "productName": "webOS Discoverium",
+  "identifier": "io.github.shantilk.weboshomebrewfork",
+  "productName": "WebOS Homebrew Fork",
   "version": "../package.json",
   "app": {
     "security": {
@@ -23,7 +23,7 @@
         "minHeight": 600,
         "minWidth": 420,
         "resizable": true,
-        "title": "webOS Discoverium",
+        "title": "WebOS Homebrew Fork",
         "visible": true,
         "width": 1024
       }

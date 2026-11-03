@@ -1,13 +1,17 @@
-# webOS Discoverium
+# WebOS Homebrew Fork
 
-A fork of [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop) by the webOS Homebrew Team, with a **Discoverium** tab added. It keeps homebrew apps on an LG webOS TV up to date from their release links, like Obtainium and Discoverium do for Android apps.
+A fork of [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop) by the webOS Homebrew Team, with an **Updates** tab for keeping homebrew apps on an LG webOS TV up to date from their release links.
 
-- **Add apps by link:** paste an app's GitHub, GitLab or Codeberg/Gitea/Forgejo repository. The list starts empty.
-- **Update all:** one button updates every app with a newer release, using Dev Manager's own installer (Homebrew Channel on rooted TVs, developer mode otherwise).
-- **Shared with the TV:** the list is stored on the TV (`/media/developer/discoverium/sources.json`) and shared with the [Discoverium TV](https://github.com/Shantil-K/DiscoveriumTV) app, which can also update apps by itself in the background.
+- **Add apps by link:** paste an app's GitHub, GitLab or Codeberg/Gitea/Forgejo repository. The app reads the package's app ID from its newest release.
+- **Update all:** one button installs every newer release, using Dev Manager's own installer (Homebrew Channel on rooted TVs, developer mode otherwise).
+- **Works with the TV off:** the list is kept in the app (one list per TV), so you can add apps any time; versions and installs come back when the TV is on.
 - **Everything else** is Dev Manager as before: device setup (developer mode, or root SSH with a key or password), apps, files and terminal.
 
-Changes from upstream are in `src/app/discover/` plus small edits to the routes, the nav bar, the app name and ID (`io.github.shantilk.webosdiscoverium`, so it installs next to the official app), and `angular.json`. `scripts/sync-discover-core.sh` copies the shared update logic from Discoverium TV, and `scripts/sign-apk.sh` signs a local Android build.
+Changes from upstream: the Updates tab (`src/app/updates/`), the app's name and ID (`io.github.shantilk.weboshomebrewfork`, so it installs next to the official app), the update check and links pointing at this repo, crash reporting switched off (upstream's Sentry project), and a release workflow that builds every platform on a version tag. `scripts/sign-apk.sh` signs a local Android build.
+
+## Releases
+
+Pushing a tag like `v1.0.0` builds and publishes Windows (`.msi`, x64 and x86), Linux (`.deb`, `.rpm` and `.AppImage`, amd64 and arm64), macOS (universal `.dmg`) and Android (universal `.apk`, signed with the repository's key). The Android build needs these repository secrets: `ANDROID_SIGNING_STORE_DATA` (the keystore, base64), `ANDROID_SIGNING_STORE_PASSWORD`, `ANDROID_SIGNING_KEY_ALIAS` and `ANDROID_SIGNING_KEY_PASSWORD`.
 
 Licensed under the Apache License 2.0, like the original. The original README follows.
 

@@ -12,7 +12,8 @@ initSentry({
     integrations: [
         browserTracingIntegration()
     ],
-    enabled: !!ReleaseInfo.version,
+    // Off in this fork: the DSN belongs to the upstream project, which should not receive this app's errors
+    enabled: false,
     environment: AppConfig.environment,
     release: ReleaseInfo.version || 'local',
     stackParser: (stack: string, skipFirst?: number) => {

@@ -8,41 +8,39 @@ import {Device} from '../types';
 import {DeviceManagerService} from '../core/services';
 import {MessageDialogComponent} from '../shared/components/message-dialog/message-dialog.component';
 import {ProgressDialogComponent} from '../shared/components/progress-dialog/progress-dialog.component';
-import {DiscoverRow, DiscoverService, DiscoverSettings, notesToHtml} from './discover.service';
+import {notesToHtml, UpdateRow, UpdatesService} from './updates.service';
 
-type View = 'apps' | 'app' | 'add' | 'settings';
+type View = 'list' | 'app' | 'add';
 
 /**
- * Discoverium for webOS, laid out like the Discoverium/Obtainium apps: an apps list, an app page with
- * release notes, an "Add app" page and settings. The list itself lives on the TV, shared with the
- * Discoverium TV app, and only holds links the user adds.
+ * Updates tab: tracks homebrew apps by their release links and updates them all at once. The list is kept
+ * on this phone (one per TV); the TV is only needed to see installed versions and to install.
  */
 @Component({
-    selector: 'app-discover',
+    selector: 'app-updates',
     imports: [FormsModule],
-    templateUrl: './discover.component.html',
-    styleUrl: './discover.component.scss',
+    templateUrl: './updates.component.html',
+    styleUrl: './updates.component.scss',
     changeDetection: ChangeDetectionStrategy.Eager,
 })
-export class DiscoverComponent implements OnInit, OnDestroy {
-    view: View = 'apps';
+export class UpdatesComponent implements OnInit, OnDestroy {
+    view: View = 'list';
     device: Device | null = null;
-    rows: DiscoverRow[] | null = null;
-    selected: DiscoverRow | null = null;
-    settings: DiscoverSettings | null = null;
-    tvHelper: boolean | null = null;
+    rows: UpdateRow[] | null = null;
+    selected: UpdateRow | null = null;
+    offline = false;
     loading = false;
     checkedAt: number | null = null;
     error: string | null = null;
     addUrl = '';
     adding = false;
     addError: string | null = null;
-    readonly intervals = [6, 12, 24, 48, 168];
 
     private sub?: Subscription;
+    private retryTimer?: ReturnType<typeof setInterval>;
     private notesCache = new Map<string, SafeHtml>();
 
-    constructor(private deviceManager: DeviceManagerService, private discover: DiscoverService,
+    constructor(private deviceManager: DeviceManagerService, private updates: UpdatesService,
                 private modals: NgbModal, private cd: ChangeDetectorRef, private sanitizer: DomSanitizer) {
     }
 
@@ -51,29 +49,30 @@ export class DiscoverComponent implements OnInit, OnDestroy {
             this.device = device;
             this.rows = null;
             this.selected = null;
-            this.tvHelper = null;
-            this.view = 'apps';
+            this.offline = false;
+            this.view = 'list';
             if (device) this.load(false);
         });
     }
 
     ngOnDestroy(): void {
         this.sub?.unsubscribe();
+        clearInterval(this.retryTimer);
     }
 
-    get updates(): DiscoverRow[] {
+    get pending(): UpdateRow[] {
         return (this.rows ?? []).filter(r => r.update);
     }
 
-    /** Updates first, then by name, like Discoverium's default order */
-    get sortedRows(): DiscoverRow[] {
+    /** Updates first, then by name */
+    get sortedRows(): UpdateRow[] {
         return (this.rows ?? []).slice().sort((a, b) =>
             (Number(b.update) - Number(a.update)) || a.title.localeCompare(b.title));
     }
 
     /** Inner pages add a history entry, so the phone's Back button returns to the list */
-    show(view: View, row?: DiscoverRow): void {
-        if (view !== 'apps' && this.view === 'apps') history.pushState({discover: view}, '');
+    show(view: View, row?: UpdateRow): void {
+        if (view !== 'list' && this.view === 'list') history.pushState({updatesView: view}, '');
         this.view = view;
         if (row) this.selected = row;
         if (view === 'add') this.addError = null;
@@ -81,12 +80,15 @@ export class DiscoverComponent implements OnInit, OnDestroy {
     }
 
     back(): void {
-        if (history.state?.discover) history.back(); else this.show('apps');
+        if (history.state?.updatesView) history.back(); else this.show('list');
     }
 
     @HostListener('window:popstate')
     onPopState(): void {
-        if (this.view !== 'apps') { this.view = 'apps'; this.cd.markForCheck(); }
+        if (this.view !== 'list') {
+            this.view = 'list';
+            this.cd.markForCheck();
+        }
     }
 
     async load(refresh: boolean): Promise<void> {
@@ -96,12 +98,11 @@ export class DiscoverComponent implements OnInit, OnDestroy {
         this.error = null;
         this.cd.markForCheck();
         try {
-            const sources = await this.discover.readSources(device);
-            this.settings = sources.settings;
-            this.rows = await this.discover.rows(device, sources, refresh);
-            if (this.selected) this.selected = this.rows.find(r => r.entry.appId === this.selected!.entry.appId) ?? null;
-            if (this.view === 'app' && !this.selected) this.view = 'apps';
-            this.tvHelper = await this.discover.tvHelperInstalled(device);
+            const result = await this.updates.rows(device, refresh);
+            this.rows = result.rows;
+            this.offline = result.offline;
+            if (this.selected) this.selected = this.rows.find(r => r.app.appId === this.selected!.app.appId) ?? null;
+            if (this.view === 'app' && !this.selected) this.view = 'list';
             this.checkedAt = Date.now();
         } catch (e) {
             this.error = String((e as Error).message ?? e).slice(0, 300);
@@ -109,6 +110,9 @@ export class DiscoverComponent implements OnInit, OnDestroy {
             this.loading = false;
             this.cd.markForCheck();
         }
+        // while the TV is off, look again every 30 seconds so versions and installs come back by themselves
+        clearInterval(this.retryTimer);
+        this.retryTimer = this.offline ? setInterval(() => { if (!this.loading) this.load(false); }, 30000) : undefined;
     }
 
     async add(): Promise<void> {
@@ -117,11 +121,11 @@ export class DiscoverComponent implements OnInit, OnDestroy {
         this.addError = null;
         this.cd.markForCheck();
         try {
-            const entry = await this.discover.add(this.device, this.addUrl.trim());
+            const app = await this.updates.add(this.device, this.addUrl.trim());
             this.addUrl = '';
             await this.load(false);
-            const row = this.rows?.find(r => r.entry.appId === entry.appId);
-            this.show(row ? 'app' : 'apps', row);
+            const row = this.rows?.find(r => r.app.appId === app.appId);
+            if (row) this.show('app', row); else this.back();
         } catch (e) {
             this.addError = String((e as Error).message ?? e).slice(0, 300);
         } finally {
@@ -130,7 +134,7 @@ export class DiscoverComponent implements OnInit, OnDestroy {
         }
     }
 
-    async install(rows: DiscoverRow[]): Promise<void> {
+    async install(rows: UpdateRow[]): Promise<void> {
         const device = this.device;
         if (!device || !rows.length) return;
         const ref = ProgressDialogComponent.open(this.modals);
@@ -142,7 +146,7 @@ export class DiscoverComponent implements OnInit, OnDestroy {
                 const prefix = rows.length > 1 ? `(${i + 1}/${rows.length}) ` : '';
                 dialog.update(`${prefix}${r.title} ${r.latest?.version ?? ''}`);
                 try {
-                    await this.discover.install(device, r, (progress, status) =>
+                    await this.updates.install(device, r, (progress, status) =>
                         dialog.update(`${prefix}${r.title}: ${status ?? ''}`, progress));
                 } catch (e) {
                     failed.push(`${r.title}: ${(e as Error).message ?? e}`);
@@ -161,19 +165,14 @@ export class DiscoverComponent implements OnInit, OnDestroy {
         await this.load(false);
     }
 
-    async setEntry(row: DiscoverRow, patch: { autoUpdate?: boolean, prerelease?: boolean, filter?: string }): Promise<void> {
+    async setOption(row: UpdateRow, patch: { prerelease?: boolean, filter?: string }): Promise<void> {
         if (!this.device) return;
-        Object.assign(row.entry, patch);
-        try {
-            await this.discover.setEntry(this.device, row.entry.appId, patch);
-            if (patch.prerelease !== undefined || patch.filter !== undefined) await this.load(true);
-        } catch (e) {
-            this.error = String((e as Error).message ?? e).slice(0, 300);
-        }
-        this.cd.markForCheck();
+        Object.assign(row.app, patch);
+        this.updates.update(this.device, row.app.appId, patch);
+        await this.load(true);
     }
 
-    async remove(row: DiscoverRow): Promise<void> {
+    async remove(row: UpdateRow): Promise<void> {
         if (!this.device) return;
         const ok = await MessageDialogComponent.open(this.modals, {
             title: 'Remove app',
@@ -181,29 +180,22 @@ export class DiscoverComponent implements OnInit, OnDestroy {
             positive: 'Remove', positiveStyle: 'danger', negative: 'Cancel', autofocus: 'negative',
         }).result.catch(() => false);
         if (!ok) return;
-        await this.discover.remove(this.device, row.entry.appId).catch(e => this.error = (e as Error).message);
+        this.updates.remove(this.device, row.app.appId);
         this.selected = null;
         this.back();
         await this.load(false);
     }
 
-    async setSetting(patch: Partial<DiscoverSettings>): Promise<void> {
-        if (!this.device || !this.settings) return;
-        Object.assign(this.settings, patch);
-        await this.discover.setSettings(this.device, patch).catch(e => this.error = (e as Error).message);
-        this.cd.markForCheck();
-    }
-
     // ---- display helpers ------------------------------------------------------------------------
 
-    icon(row: DiscoverRow): SafeUrl | null {
+    icon(row: UpdateRow): SafeUrl | null {
         return row.iconUri ? this.sanitizer.bypassSecurityTrustUrl(row.iconUri) : null;
     }
 
-    notes(row: DiscoverRow): SafeHtml | null {
+    notes(row: UpdateRow): SafeHtml | null {
         const md = row.latest?.notes;
         if (!md?.trim()) return null;
-        const key = `${row.entry.appId}@${row.latest!.version}`;
+        const key = `${row.app.appId}@${row.latest!.version}`;
         let html = this.notesCache.get(key);
         if (!html) {
             html = this.sanitizer.bypassSecurityTrustHtml(notesToHtml(md));
@@ -224,11 +216,7 @@ export class DiscoverComponent implements OnInit, OnDestroy {
         return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
     }
 
-    hoursLabel(h: number): string {
-        return h >= 168 ? 'Every week' : h >= 48 ? `Every ${h / 24} days` : h === 24 ? 'Every day' : `Every ${h} hours`;
-    }
-
-    initial(row: DiscoverRow): string {
+    initial(row: UpdateRow): string {
         return (row.title || '?').charAt(0).toUpperCase();
     }
 

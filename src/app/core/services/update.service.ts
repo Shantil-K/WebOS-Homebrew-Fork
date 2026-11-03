@@ -8,7 +8,7 @@ import {SemVer} from 'semver';
 export class UpdateService {
 
     async getRecentRelease(): Promise<Release> {
-        return fetch('https://api.github.com/repos/webosbrew/dev-manager-desktop/releases/latest', {
+        return fetch('https://api.github.com/repos/Shantil-K/WebOS-Homebrew-Fork/releases/latest', {
             headers: {'accept': 'application/vnd.github.v3+json'},
 
         }).then(async res => new ReleaseImpl(await res.json()));

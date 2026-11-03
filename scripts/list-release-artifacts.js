@@ -10,6 +10,7 @@ const patterns = [
   'target/**/bundle/appimage/*.AppImage.zsync',
   'target/**/bundle/msi/*.msi',
   'target/**/bundle/dmg/*.dmg',
+  'target/android/*.apk',
 ];
 
 const paths = [...new Set(patterns.flatMap(pattern => fs.globSync(pattern).map(path => path.replaceAll('\\', '/'))))].sort();
