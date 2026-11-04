@@ -24,13 +24,15 @@ export interface Release {
     prerelease: boolean;
     page: string;
     notes: string;
+    /** every .ipk in this release, for choosing a package */
+    assets: Asset[];
 }
 
 export interface JsonClient {
     json(url: string): Promise<any>;
 }
 
-interface Asset {
+export interface Asset {
     name: string;
     url: string;
     size?: number;
@@ -126,6 +128,31 @@ export function compareVersions(a: string, b: string): number {
     return ra.localeCompare(rb, undefined, {numeric: true});
 }
 
+/**
+ * The TV keeps only plain numbers (a 0.8.5-b2 build reports 0.8.5), so an installed version is compared with a
+ * release by its numbers first. When those match, the build is told apart by its suffix: `known` is the full
+ * version this app last installed. Without it, a suffixed build like 0.8.5-b2 counts as newer than plain 0.8.5.
+ */
+export function compareInstalled(release: string, installed: string, known?: string | null): number {
+    const nums = (v: string) => cleanVersion(v).split(/[-+~_\s]/)[0];
+    const suffix = (v: string) => cleanVersion(v).slice(nums(v).length).replace(/^[-+~_\s]+/, '');
+    const c = compareVersions(nums(release), nums(installed));
+    if (c) return c;
+    const rs = suffix(release);
+    const ks = known && !compareVersions(nums(known), nums(installed)) ? suffix(known) : null;
+    if (ks === null) return rs ? 1 : 0;
+    if (rs === ks) return 0;
+    if (rs && ks) return rs.localeCompare(ks, undefined, {numeric: true});
+    // one is a test build and the other the plain release of the same number: a different build is an update
+    return 1;
+}
+
+/** The installed version to show: the full build this app installed, when the TV's number matches it */
+export function installedLabel(installed: string, known?: string | null): string {
+    const nums = (v: string) => cleanVersion(v).split(/[-+~_\s]/)[0];
+    return known && !compareVersions(nums(known), nums(installed)) ? cleanVersion(known) : installed;
+}
+
 /** Version from an ipk file name like com.example.app_1.2.3_all.ipk */
 export function versionFromName(name: string): string | null {
     const m = /_(\d[\w.+~-]*?)_(all|arm\w*|aarch64|i686|x86\w*)\.ipk$/i.exec(name || '');
@@ -135,8 +162,12 @@ export function versionFromName(name: string): string | null {
 // The TV's userland is 32-bit ARM: prefer arch-independent packages, then arm
 const ARCH_ORDER = [/_all\.ipk$/i, /_arm(v7\w*)?\.ipk$/i, /_armhf\.ipk$/i, /_aarch64\.ipk$/i, /\.ipk$/i];
 
+export function ipkAssets(assets: Asset[]): Asset[] {
+    return assets.filter(a => /\.ipk$/i.test(a.name));
+}
+
 export function pickAsset(assets: Asset[], filter?: string): Asset | null {
-    let ipks = assets.filter(a => /\.ipk$/i.test(a.name));
+    let ipks = ipkAssets(assets);
     if (filter) {
         let re: RegExp | null = null;
         try {
@@ -153,12 +184,52 @@ export function pickAsset(assets: Asset[], filter?: string): Asset | null {
     return null;
 }
 
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Turns a chosen file name into a filter that keeps matching it in later releases: the version part becomes a
+ * wildcard and the rest must match exactly, so "app_1.2_all.ipk" and "app_1.2_all_webOS22+.ipk" stay apart.
+ */
+export function assetPattern(name: string, tag?: string | null): string {
+    const versions = [cleanVersion(tag), versionFromName(name)].filter((v): v is string => !!v);
+    for (const v of versions) {
+        // the tag may write the version with other separators than the file name (0.8.5-b2 vs 0.8.5_b2)
+        const loose = new RegExp('(?<![\\d.])' + v.split(/[._+~-]/).filter(Boolean).map(escapeRe).join('[._+~-]') + '(?!\\d)', 'i');
+        const m = loose.exec(name);
+        if (m) return '^' + escapeRe(name.slice(0, m.index)) + '.+?' + escapeRe(name.slice(m.index + m[0].length)) + '$';
+    }
+    const generic = /\d+(?:\.\d+)+(?:[._-]?(?:alpha|beta|rc|b|a)\d*)?/i.exec(name);
+    if (generic) {
+        return '^' + escapeRe(name.slice(0, generic.index)) + '.+?' + escapeRe(name.slice(generic.index + generic[0].length)) + '$';
+    }
+    return '^' + escapeRe(name) + '$';
+}
+
+/** What tells a package apart from its siblings: "app_1.2_all_webOS22+.ipk" -> ["all", "webOS22+"] */
+export function variantOf(name: string, tag?: string | null): string[] {
+    const m = /\^(.*?)\.\+\?(.*)\$$/.exec(assetPattern(name, tag));
+    const rest = m ? m[2].replace(/\\(.)/g, '$1') : name;
+    return rest.replace(/\.ipk$/i, '').split(/[_\s]+/).filter(Boolean);
+}
+
+/** The same release, using another of its .ipk files */
+export function withAsset(release: Release, name: string): Release {
+    const asset = release.assets.find(a => a.name === name);
+    if (!asset) throw new Error(`${name} is not in this release`);
+    return {
+        ...release, version: versionFromName(asset.name) || cleanVersion(release.tag) || release.tag || '',
+        ipkUrl: asset.url, ipkName: asset.name, size: asset.size || 0, sha256: asset.sha256 || null,
+    };
+}
+
 /** Newest release that carries an .ipk */
 export async function latest(entry: { url: string, prerelease?: boolean, filter?: string }, http: JsonClient): Promise<Release> {
     const src = parseSource(entry.url), pre = !!entry.prerelease, filter = entry.filter || '';
     const pick = (list: RawRelease[]): Release => {
+        let sawIpk = false;
         for (const r of list) {
             if (r.draft || (r.prerelease && !pre)) continue;
+            if (ipkAssets(r.assets).length) sawIpk = true;
             const asset = pickAsset(r.assets, filter);
             if (!asset) continue;
             return {
@@ -166,8 +237,10 @@ export async function latest(entry: { url: string, prerelease?: boolean, filter?
                 tag: r.tag, ipkUrl: asset.url, ipkName: asset.name, size: asset.size || 0,
                 sha256: asset.sha256 || null, date: r.date || null, prerelease: !!r.prerelease, page: r.page || src.url,
                 notes: r.notes ? String(r.notes).slice(0, 20000) : '',
+                assets: ipkAssets(r.assets),
             };
         }
+        if (sawIpk && filter) throw new Error('No .ipk file matches the package filter. Choose the package again.');
         throw new Error('No release with an .ipk file found');
     };
     if (src.type === 'github') {

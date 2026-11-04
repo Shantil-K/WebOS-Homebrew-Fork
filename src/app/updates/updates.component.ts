@@ -1,4 +1,5 @@
 import {ChangeDetectionStrategy, ChangeDetectorRef, Component, HostListener, OnDestroy, OnInit} from '@angular/core';
+import {NgTemplateOutlet} from '@angular/common';
 import {FormsModule} from '@angular/forms';
 import {DomSanitizer, SafeHtml, SafeUrl} from '@angular/platform-browser';
 import {NgbModal} from '@ng-bootstrap/ng-bootstrap';
@@ -9,8 +10,9 @@ import {DeviceManagerService} from '../core/services';
 import {MessageDialogComponent} from '../shared/components/message-dialog/message-dialog.component';
 import {ProgressDialogComponent} from '../shared/components/progress-dialog/progress-dialog.component';
 import {notesToHtml, UpdateRow, UpdatesService} from './updates.service';
+import {author, Release, variantOf} from './release-core';
 
-type View = 'list' | 'app' | 'add';
+type View = 'list' | 'app' | 'add' | 'pick';
 
 /**
  * Updates tab: tracks homebrew apps by their release links and updates them all at once. The list is kept
@@ -18,7 +20,7 @@ type View = 'list' | 'app' | 'add';
  */
 @Component({
     selector: 'app-updates',
-    imports: [FormsModule],
+    imports: [FormsModule, NgTemplateOutlet],
     templateUrl: './updates.component.html',
     styleUrl: './updates.component.scss',
     changeDetection: ChangeDetectionStrategy.Eager,
@@ -33,8 +35,14 @@ export class UpdatesComponent implements OnInit, OnDestroy {
     checkedAt: number | null = null;
     error: string | null = null;
     addUrl = '';
+    addFilter = '';
     adding = false;
     addError: string | null = null;
+    /** a looked-up link whose release has several .ipk files, waiting for the person to choose one */
+    found: { url: string, name: string, release: Release, filter: string } | null = null;
+    /** .ipk files of the selected app's newest release, for its Package menu */
+    packages: { tag: string | null, names: string[], labels: Map<string, string>, sizes: Map<string, number> } | null = null;
+    packagesFor: string | null = null;
 
     private sub?: Subscription;
     private retryTimer?: ReturnType<typeof setInterval>;
@@ -76,7 +84,42 @@ export class UpdatesComponent implements OnInit, OnDestroy {
         this.view = view;
         if (row) this.selected = row;
         if (view === 'add') this.addError = null;
+        if (view === 'app' && this.selected) this.loadPackages(this.selected);
         this.cd.markForCheck();
+    }
+
+    /** Looks up the selected app's packages once per visit, for the Package menu */
+    private async loadPackages(row: UpdateRow): Promise<void> {
+        if (this.packagesFor === row.app.appId) return;
+        this.packagesFor = row.app.appId;
+        this.packages = null;
+        try {
+            const release = await this.updates.packages(row.app);
+            if (this.packagesFor !== row.app.appId) return;
+            this.packages = {tag: release.tag, names: release.assets.map(a => a.name), labels: this.packageLabels(release),
+                sizes: new Map(release.assets.map(a => [a.name, a.size || 0]))};
+        } catch {
+            this.packagesFor = null;
+        } finally {
+            this.cd.markForCheck();
+        }
+    }
+
+    /** Which of the listed packages the app's filter picks */
+    currentPackage(row: UpdateRow): string {
+        const names = this.packages?.names ?? [];
+        if (row.latest && names.includes(row.latest.ipkName)) return row.latest.ipkName;
+        try {
+            const re = row.app.filter ? new RegExp(row.app.filter, 'i') : null;
+            return (re && names.find(n => re.test(n))) || '';
+        } catch {
+            return '';
+        }
+    }
+
+    async choosePackage(row: UpdateRow, name: string): Promise<void> {
+        if (!name || !this.packages) return;
+        await this.setOption(row, {filter: this.updates.patternFor(name, this.packages.tag)});
     }
 
     back(): void {
@@ -87,6 +130,7 @@ export class UpdatesComponent implements OnInit, OnDestroy {
     onPopState(): void {
         if (this.view !== 'list') {
             this.view = 'list';
+            this.found = null;
             this.cd.markForCheck();
         }
     }
@@ -121,8 +165,33 @@ export class UpdatesComponent implements OnInit, OnDestroy {
         this.addError = null;
         this.cd.markForCheck();
         try {
-            const app = await this.updates.add(this.device, this.addUrl.trim());
+            const found = await this.updates.lookup(this.device, this.addUrl.trim(), this.addFilter.trim());
+            // a filter typed in already says which package to use
+            if (found.release.assets.length > 1 && !found.filter) {
+                this.found = found;
+                this.view = 'pick';
+                return;
+            }
+            await this.finishAdd(found);
+        } catch (e) {
+            this.addError = String((e as Error).message ?? e).slice(0, 300);
+        } finally {
+            this.adding = false;
+            this.cd.markForCheck();
+        }
+    }
+
+    /** Adds the looked-up app with the chosen package (or its only one) */
+    async finishAdd(found: { url: string, name: string, release: Release, filter: string }, ipkName?: string): Promise<void> {
+        if (!this.device) return;
+        this.adding = true;
+        this.addError = null;
+        this.cd.markForCheck();
+        try {
+            const app = await this.updates.add(this.device, found, ipkName);
             this.addUrl = '';
+            this.addFilter = '';
+            this.found = null;
             await this.load(false);
             const row = this.rows?.find(r => r.app.appId === app.appId);
             if (row) this.show('app', row); else this.back();
@@ -132,6 +201,41 @@ export class UpdatesComponent implements OnInit, OnDestroy {
             this.adding = false;
             this.cd.markForCheck();
         }
+    }
+
+    /** Leaves the package choice and returns to the link form */
+    cancelPick(): void {
+        this.found = null;
+        this.view = 'add';
+        this.cd.markForCheck();
+    }
+
+    /**
+     * Friendly names for the packages of one release: the parts every file shares are dropped, so
+     * "app_1.2_all.ipk" and "app_1.2_all_webOS22+.ipk" read "Standard" and "webOS 22 and newer".
+     */
+    packageLabels(release: Release): Map<string, string> {
+        const parts = release.assets.map(a => variantOf(a.name, release.tag));
+        const shared = parts[0]?.filter(p => parts.every(q => q.includes(p))) ?? [];
+        const nice = (p: string) => {
+            const os = /^webos[-_]?(\d+)(\+)?$/i.exec(p);
+            if (os) return `webOS ${os[1]}${os[2] ? ' and newer' : ''}`;
+            return ({all: 'Any TV', arm: 'ARM', armv7: 'ARM', armv7l: 'ARM', armhf: 'ARM', aarch64: 'ARM 64-bit',
+                i686: 'x86', x86_64: 'x86 64-bit'} as Record<string, string>)[p.toLowerCase()] ?? p;
+        };
+        return new Map(release.assets.map((a, i) => {
+            const own = parts[i].filter(p => !shared.includes(p)).map(nice);
+            return [a.name, own.length ? own.join(' · ') : 'Standard'];
+        }));
+    }
+
+    author(url: string): string {
+        return author(url);
+    }
+
+    formatSize(bytes: number | undefined): string {
+        if (!bytes) return '';
+        return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
     }
 
     async install(rows: UpdateRow[]): Promise<void> {
@@ -165,11 +269,26 @@ export class UpdatesComponent implements OnInit, OnDestroy {
         await this.load(false);
     }
 
+    async launch(row: UpdateRow): Promise<void> {
+        if (!this.device) return;
+        try {
+            await this.updates.launch(this.device, row.app.appId);
+        } catch (e) {
+            MessageDialogComponent.open(this.modals, {
+                title: 'Could not launch', message: `${row.title}: ${(e as Error).message ?? e}`, positive: 'OK',
+            });
+        }
+    }
+
     async setOption(row: UpdateRow, patch: { prerelease?: boolean, filter?: string }): Promise<void> {
         if (!this.device) return;
         Object.assign(row.app, patch);
         this.updates.update(this.device, row.app.appId, patch);
         await this.load(true);
+        if ('prerelease' in patch && this.selected) {
+            this.packagesFor = null;
+            this.loadPackages(this.selected);
+        }
     }
 
     async remove(row: UpdateRow): Promise<void> {

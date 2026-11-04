@@ -34,3 +34,16 @@
     .note-head { font-weight: 600; margin: 10px 0 4px; }
   }
 }
+
+// every package of the release, tap one to use it
+.pkg-list {
+  .pkg-file { word-break: break-all; }
+  .bi-circle { color: var(--bs-secondary-color); }
+
+  .selected {
+    background: rgba(var(--bs-primary-rgb), .12);
+    border-color: rgba(var(--bs-primary-rgb), .5);
+    z-index: 1;
+    .bi { color: var(--bs-primary); }
+  }
+}

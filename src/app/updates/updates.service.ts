@@ -93,15 +93,44 @@ export class UpdatesService {
         this.save(device, 'apps', apps);
     }
 
-    /** Adds a link: finds its newest .ipk and reads the app id inside it. Needs the internet, not the TV. */
-    async add(device: Device, input: string): Promise<TrackedApp> {
+    /** First step of adding a link: finds its newest release. Needs the internet, not the TV. */
+    async lookup(device: Device, input: string, filter = ''): Promise<{ url: string, name: string, release: Release, filter: string }> {
         const src = Releases.parseSource(input);
-        const apps = this.apps(device);
-        if (apps.some(a => Releases.sourceKey(a.url) === Releases.sourceKey(src.url))) {
+        if (this.apps(device).some(a => Releases.sourceKey(a.url) === Releases.sourceKey(src.url))) {
             throw new Error('That link is already in the list');
         }
-        const release = await this.latest({url: src.url, prerelease: false, filter: ''});
-        // the app id is in the first part of the package; download it all only if that is not enough
+        let release: Release;
+        try {
+            release = await this.latest({url: src.url, prerelease: false, filter});
+        } catch (e) {
+            // some apps only publish pre-releases
+            release = await this.latest({url: src.url, prerelease: true, filter}).catch(() => { throw e; });
+        }
+        return {url: src.url, name: src.repo || src.project?.split('/').pop() || '', release, filter};
+    }
+
+    /**
+     * Second step: reads the app id inside the chosen package and saves the app. When the release has several
+     * .ipk files, the chosen one is remembered as a filter so later releases use the same kind of package.
+     */
+    async add(device: Device, found: { url: string, name: string, release: Release, filter?: string }, ipkName?: string): Promise<TrackedApp> {
+        const release = ipkName ? Releases.withAsset(found.release, ipkName) : found.release;
+        const info = await this.readId(release);
+        const apps = this.apps(device);
+        if (apps.some(a => a.appId === info.id)) throw new Error(`${info.id} is already in the list`);
+        const app: TrackedApp = {
+            url: found.url, appId: info.id, name: found.name || info.id,
+            prerelease: !!release.prerelease,
+            filter: found.filter || (release.assets.length > 1 ? Releases.assetPattern(release.ipkName, release.tag) : ''),
+            added: Date.now(),
+        };
+        this.saveApps(device, [...apps, app]);
+        this.latestCache.set(info.id, release);
+        return app;
+    }
+
+    /** the app id is in the first part of the package; download it all only if that is not enough */
+    private async readId(release: Release): Promise<{ id: string, version: string | null }> {
         const get = async (range: boolean) => {
             const headers: Record<string, string> = {'User-Agent': UA};
             if (range) headers['Range'] = `bytes=0-${Releases.PROBE_BYTES - 1}`;
@@ -109,21 +138,22 @@ export class UpdatesService {
             if (!res.ok) throw new Error(`Could not download ${release.ipkName} (HTTP ${res.status})`);
             return new Uint8Array(await res.arrayBuffer());
         };
-        let info;
         try {
-            info = await Releases.readIpkControl(await get(true), gunzip);
+            return await Releases.readIpkControl(await get(true), gunzip);
         } catch (e) {
             if (!(e instanceof Releases.TruncatedError)) throw e;
-            info = await Releases.readIpkControl(await get(false), gunzip);
+            return Releases.readIpkControl(await get(false), gunzip);
         }
-        if (apps.some(a => a.appId === info.id)) throw new Error(`${info.id} is already in the list`);
-        const app: TrackedApp = {
-            url: src.url, appId: info.id, name: src.repo || src.project?.split('/').pop() || info.id,
-            prerelease: false, filter: '', added: Date.now(),
-        };
-        this.saveApps(device, [...apps, app]);
-        this.latestCache.set(info.id, release);
-        return app;
+    }
+
+    /** Pattern that keeps choosing this file name in later releases */
+    patternFor(name: string, tag: string | null): string {
+        return Releases.assetPattern(name, tag);
+    }
+
+    /** All .ipk files of the newest release, ignoring the package filter, so the person can choose again */
+    async packages(app: TrackedApp): Promise<Release> {
+        return this.latest({url: app.url, prerelease: app.prerelease, filter: ''});
     }
 
     remove(device: Device, appId: string): void {
@@ -169,10 +199,13 @@ export class UpdatesService {
                 }
             })),
         ]);
+        const builds = this.load<Record<string, string>>(device, 'builds', {});
         const rows = apps.map((a): UpdateRow => {
             const latest = this.latestCache.get(a.appId) ?? null;
-            const have = installed[a.appId]?.version ?? null;
-            const cmp = latest?.version && have ? Releases.compareVersions(latest.version, have) : null;
+            const tv = installed[a.appId]?.version ?? null;
+            const known = builds[a.appId] ?? null;
+            const have = tv ? Releases.installedLabel(tv, known) : null;
+            const cmp = latest?.version && tv ? Releases.compareInstalled(latest.version, tv, known) : null;
             return {
                 app: a,
                 title: installed[a.appId]?.title || a.name || a.appId,
@@ -201,6 +234,12 @@ export class UpdatesService {
             sourceUrl: row.app.url, appDescription: row.title,
         });
         await this.appManager.installByManifest(device, manifest, progress);
+        // the TV only keeps the number, so remember which build went on it
+        this.save(device, 'builds', {...this.load<Record<string, string>>(device, 'builds', {}), [row.app.appId]: l.version});
+    }
+
+    launch(device: Device, appId: string): Promise<void> {
+        return this.appManager.launch(device, appId);
     }
 }
 

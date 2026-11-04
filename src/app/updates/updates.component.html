@@ -115,9 +115,14 @@
             @if (offline) {
               <button class="btn btn-primary" disabled><i class="bi bi-wifi-off"></i> TV is off</button>
             } @else {
-              <button class="btn btn-primary" (click)="install([r])" [disabled]="!(r.update || r.install)">
-                <i class="bi bi-cloud-download"></i> {{ r.install ? 'Install' : 'Update' }}
+              <button class="btn btn-primary" (click)="install([r])" [disabled]="!r.latest">
+                @if (r.install) { <i class="bi bi-cloud-download"></i> Install }
+                @else if (r.update) { <i class="bi bi-cloud-download"></i> Update }
+                @else { <i class="bi bi-arrow-repeat"></i> Reinstall }
               </button>
+              @if (r.installed) {
+                <button class="btn btn-outline-primary" (click)="launch(r)"><i class="bi bi-play-fill"></i> Launch</button>
+              }
             }
             <button class="btn btn-outline-secondary" (click)="openLink(r.latest?.page || r.app.url)"><i class="bi bi-box-arrow-up-right"></i> Release page</button>
             <button class="btn btn-outline-danger ms-auto" (click)="remove(r)"><i class="bi bi-trash"></i> Remove</button>
@@ -129,9 +134,29 @@
                 <input class="form-check-input" type="checkbox" role="switch" id="pre" [checked]="r.app.prerelease" (change)="setOption(r, {prerelease: !r.app.prerelease})">
                 <label class="form-check-label" for="pre">Include pre-releases</label>
               </div>
-              <label class="form-label small text-secondary mt-2 mb-1" for="filter">.ipk file filter (regular expression, optional)</label>
+              @if (packages && packages.names.length > 1) {
+                <div class="form-label small text-secondary mt-3 mb-1" id="pkg">Package</div>
+                @let current = currentPackage(r);
+                <div class="list-group pkg-list" role="radiogroup" aria-labelledby="pkg">
+                  @for (n of packages.names; track n) {
+                    <button type="button" role="radio" [attr.aria-checked]="n === current"
+                            class="list-group-item list-group-item-action d-flex align-items-center gap-3 py-2"
+                            [class.selected]="n === current" (click)="n !== current && choosePackage(r, n)">
+                      <i class="bi fs-5 flex-none" [class.bi-check-circle-fill]="n === current" [class.bi-circle]="n !== current"></i>
+                      <span class="flex-fill min-w-0">
+                        <span class="d-block fw-semibold">{{ packages.labels.get(n) }}</span>
+                        <span class="d-block small text-secondary pkg-file">{{ n }}</span>
+                      </span>
+                      <span class="small text-secondary flex-none">{{ formatSize(packages.sizes.get(n)) }}</span>
+                    </button>
+                  }
+                </div>
+                <div class="form-text">Your choice is saved as the filter below, so later updates pick the same kind of file.</div>
+              }
+              <label class="form-label small text-secondary mt-3 mb-1" for="filter">.ipk file filter (regular expression, optional)</label>
               <input class="form-control form-control-sm" id="filter" [ngModel]="r.app.filter" (change)="setOption(r, {filter: $any($event.target).value})"
-                     placeholder="e.g. _arm\.ipk$" autocapitalize="off" spellcheck="false">
+                     placeholder="e.g. webOS22\+\.ipk$" autocapitalize="off" spellcheck="false">
+              <ng-container [ngTemplateOutlet]="regexHint" />
             </div>
           </div>
 
@@ -150,12 +175,19 @@
           <button class="btn btn-link px-1" (click)="back()" aria-label="Back"><i class="bi bi-arrow-left fs-5"></i></button>
           <h5 class="mb-0">Add app</h5>
         </div>
-        <form class="input-group mb-2" (ngSubmit)="add()">
-          <input class="form-control" name="addUrl" [(ngModel)]="addUrl" [disabled]="adding" placeholder="App source URL"
-                 autocapitalize="off" autocomplete="off" spellcheck="false" inputmode="url">
-          <button class="btn btn-primary" type="submit" [disabled]="adding || !addUrl.trim()">
-            @if (adding) { <span class="spinner-border spinner-border-sm"></span> } @else { Add }
-          </button>
+        <form class="mb-2" (ngSubmit)="add()">
+          <div class="input-group">
+            <input class="form-control" name="addUrl" [(ngModel)]="addUrl" [disabled]="adding" placeholder="App source URL"
+                   autocapitalize="off" autocomplete="off" spellcheck="false" inputmode="url">
+            <button class="btn btn-primary" type="submit" [disabled]="adding || !addUrl.trim()">
+              @if (adding) { <span class="spinner-border spinner-border-sm"></span> } @else { Add }
+            </button>
+          </div>
+          <label class="form-label small text-secondary mt-2 mb-1" for="addFilter">.ipk file filter (optional)</label>
+          <input class="form-control form-control-sm" id="addFilter" name="addFilter" [(ngModel)]="addFilter" [disabled]="adding"
+                 placeholder="e.g. webOS22\+\.ipk$" autocapitalize="off" autocomplete="off" spellcheck="false">
+          <div class="form-text">Leave empty to choose from a list when a release has several .ipk files. Fill it in to skip that step.</div>
+          <ng-container [ngTemplateOutlet]="regexHint" />
         </form>
         @if (addError) { <div class="alert alert-danger py-2">{{ addError }}</div> }
         <div class="card">
@@ -166,6 +198,78 @@
           </div>
         </div>
       }
+
+      <!-- ===== Choose package ===== -->
+      @case ('pick') {
+        @if (found; as f) {
+          <div class="d-flex align-items-center gap-2 mb-3">
+            <button class="btn btn-link px-1" (click)="cancelPick()" [disabled]="adding" aria-label="Back"><i class="bi bi-arrow-left fs-5"></i></button>
+            <h5 class="mb-0 text-truncate">Choose a package</h5>
+          </div>
+
+          <div class="card mb-3">
+            <div class="card-body d-flex align-items-center gap-3">
+              <span class="app-icon big letter">{{ (f.name || '?').charAt(0).toUpperCase() }}</span>
+              <div class="min-w-0">
+                <div class="fs-5 fw-semibold text-truncate">{{ f.name }}</div>
+                <div class="text-secondary text-truncate">By {{ author(f.url) }}</div>
+                <div class="small text-secondary mt-1">
+                  {{ f.release.tag }}
+                  @if (date(f.release.date); as d) { · {{ d }} }
+                  @if (f.release.prerelease) { <span class="badge text-bg-secondary ms-1">Pre-release</span> }
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p class="small text-secondary mb-2">
+            This release has {{ f.release.assets.length }} packages. Pick the one for your TV.
+            It's remembered for later updates, and you can change it on the app's page.
+          </p>
+
+          @if (addError) { <div class="alert alert-danger py-2">{{ addError }}</div> }
+
+          @let labels = packageLabels(f.release);
+          <div class="list-group mb-3">
+            @for (a of f.release.assets; track a.name) {
+              <button type="button" class="list-group-item list-group-item-action d-flex align-items-center gap-3 py-2"
+                      [disabled]="adding" (click)="finishAdd(f, a.name)">
+                <span class="app-icon letter"><i class="bi bi-box-seam"></i></span>
+                <div class="flex-fill min-w-0">
+                  <div class="fw-semibold">{{ labels.get(a.name) }}</div>
+                  <div class="small text-secondary text-break">{{ a.name }}</div>
+                </div>
+                <div class="text-end small text-secondary flex-none">
+                  {{ formatSize(a.size) }}
+                  <i class="bi bi-chevron-right ms-1"></i>
+                </div>
+              </button>
+            }
+          </div>
+
+          @if (adding) {
+            <div class="d-flex align-items-center gap-2 text-secondary small">
+              <span class="spinner-border spinner-border-sm"></span> Reading the package…
+            </div>
+          } @else {
+            <button class="btn btn-outline-secondary" (click)="cancelPick()">Cancel</button>
+          }
+        }
+      }
     }
   }
 </div>
+
+<ng-template #regexHint>
+  <details class="small text-secondary mt-1">
+    <summary>How to write a filter</summary>
+    <ul class="mb-0 ps-3 mt-1">
+      <li>It's matched against the .ipk file names in each release, ignoring case. Any part of the name is enough.</li>
+      <li>Write <code>\.</code> for a dot and <code>\+</code> for a plus; they have other meanings on their own.</li>
+      <li><code>.*</code> means "anything", e.g. for the version number. <code>$</code> means "end of name".</li>
+      <li><code>webOS22\+\.ipk$</code> picks <code>app_1.2.3_all_webOS22+.ipk</code></li>
+      <li><code>_all\.ipk$</code> picks <code>app_1.2.3_all.ipk</code> but not the webOS22+ one</li>
+      <li><code>^(?!.*webOS22)</code> picks any file without "webOS22" in its name</li>
+    </ul>
+  </details>
+</ng-template>
