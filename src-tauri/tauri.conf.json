@@ -44,30 +44,12 @@
         "desktopTemplate": "./assets/app.desktop",
         "depends": [
           "zlib1g (>=1.2.11)"
-        ],
-        "provides": [
-          "web-os-dev-manager"
-        ],
-        "conflicts": [
-          "web-os-dev-manager"
-        ],
-        "replaces": [
-          "web-os-dev-manager"
         ]
       },
       "rpm": {
         "desktopTemplate": "./assets/app.desktop",
         "depends": [
           "zlib"
-        ],
-        "provides": [
-          "web-os-dev-manager"
-        ],
-        "conflicts": [
-          "web-os-dev-manager"
-        ],
-        "obsoletes": [
-          "web-os-dev-manager"
         ]
       }
     },

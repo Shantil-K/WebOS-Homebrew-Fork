@@ -1,3 +1,4 @@
 {
-  "productName": "webos-homebrew-fork"
+  "productName": "webos-homebrew-fork",
+  "mainBinaryName": "webos-homebrew-fork"
 }
